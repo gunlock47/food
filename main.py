@@ -97,7 +97,14 @@ def build_rules(baskets):
 
     rules_df = pd.DataFrame(rule_rows)
     pairs_df = pd.DataFrame(pair_rows)
-    return rules_df, pairs_df, item_count
+
+    # 메뉴별로 "한 번이라도 같이 나온 적 있는 메뉴" 집합
+    partners_of = {}
+    for a, c in pair_count.keys():
+        partners_of.setdefault(a, set()).add(c)
+        partners_of.setdefault(c, set()).add(a)
+
+    return rules_df, pairs_df, item_count, partners_of
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +116,7 @@ st.caption("같은 날 함께 나온 메뉴들 사이의 연관 규칙(지지도
 with st.spinner("데이터를 불러오는 중..."):
     df = load_data()
     baskets = build_baskets(df)
-    rules_df, pairs_df, item_count = build_rules(baskets)
+    rules_df, pairs_df, item_count, partners_of = build_rules(baskets)
 
 n_days = len(baskets)
 n_menus = len(item_count)
@@ -136,6 +143,14 @@ with col2:
         index=0,
     )
 
+min_co = st.slider(
+    "최소 동시 일수 (이보다 적게 겹친 규칙은 표에서 제외)",
+    min_value=1,
+    max_value=10,
+    value=1,
+    step=1,
+)
+
 sort_col_map = {"향상도 순": "향상도", "신뢰도 순": "신뢰도", "동시 순": "동시"}
 sort_col = sort_col_map[sort_option]
 
@@ -146,7 +161,10 @@ if selected_menu != "전체 보기":
         (display_rules["조건"] == selected_menu) | (display_rules["결과"] == selected_menu)
     ]
 
+display_rules = display_rules[display_rules["동시"] >= min_co]
 display_rules = display_rules.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
+st.markdown(f"**최소 동시 일수 {min_co}일 이상 조건을 만족하는 규칙 수: {len(display_rules)}개**")
 
 st.subheader("연관 규칙 표")
 st.dataframe(
@@ -167,6 +185,7 @@ if selected_menu != "전체 보기":
     chart_pairs = chart_pairs[
         (chart_pairs["메뉴1"] == selected_menu) | (chart_pairs["메뉴2"] == selected_menu)
     ]
+chart_pairs = chart_pairs[chart_pairs["동시"] >= min_co]
 
 top10 = chart_pairs.sort_values("향상도", ascending=False).head(10).copy()
 
@@ -188,3 +207,35 @@ else:
     fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     fig.update_layout(yaxis_title="", xaxis_title="향상도(Lift)", height=500)
     st.plotly_chart(fig, width='stretch')
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 함께 나온 적 없는 짝
+# ---------------------------------------------------------------------------
+st.subheader("🚫 함께 나온 적 없는 짝")
+st.caption("고른 메뉴와 같은 날 한 번도 함께 나오지 않았으면서, 그 메뉴 혼자서는 10일 이상 나온 메뉴를 찾습니다.")
+
+base_menu = st.selectbox(
+    "기준 메뉴 선택",
+    all_menus,
+    index=0,
+    key="never_together_menu",
+)
+
+base_days = item_count[base_menu]
+st.markdown(f"**'{base_menu}'가 나온 날 수: {base_days}일**")
+
+partners = partners_of.get(base_menu, set())
+candidates = [
+    (menu, cnt)
+    for menu, cnt in item_count.items()
+    if menu != base_menu and menu not in partners and cnt >= 10
+]
+candidates.sort(key=lambda x: x[1], reverse=True)
+
+if not candidates:
+    st.info(f"'{base_menu}'와 함께 나온 적 없으면서 10일 이상 나온 메뉴가 없습니다.")
+else:
+    never_together_df = pd.DataFrame(candidates, columns=["메뉴", "나온 날 수"])
+    st.dataframe(never_together_df, width='stretch', height=300)
